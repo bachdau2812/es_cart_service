@@ -1,0 +1,37 @@
+server:
+  port: 8085
+  servlet:
+    context-path: /cart
+
+spring:
+  application:
+    name: cart-service
+
+  data:
+    mongodb:
+      uri: mongodb://bachdau:bachdau@localhost:27017/delivery-service?authSource=admin
+
+    redis:
+      host: localhost
+      port: 6379
+      password: bachdau
+      timeout: 2000
+
+  kafka:
+    bootstrap-server: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: default-group
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.dauducbach.event"
+
+app:
+  datacenter-id: 1
+  worker-id: 1
+
+jwt:
+  signedKey: "1TjXchw5FloESb63Kc+DFhTARvpWL4jUGCwfGWxuG5SIf/1y/LgJxHnMqaF6A/ij"

@@ -9,7 +9,7 @@ spring:
 
   data:
     mongodb:
-      uri: mongodb://bachdau:bachdau@localhost:27017/delivery-service?authSource=admin
+      uri: mongodb://bachdau:bachdau@localhost:27017/cart?authSource=admin
 
     redis:
       host: localhost

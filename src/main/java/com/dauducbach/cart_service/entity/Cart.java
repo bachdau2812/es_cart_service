@@ -14,7 +14,7 @@ import java.util.List;
 @FieldDefaults(level = AccessLevel.PRIVATE)
 @Builder
 
-@Document(collation = "cart")
+@Document("cart")
 public class Cart {
     @Id
     String id;

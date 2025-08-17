@@ -50,7 +50,7 @@ public class CartOperator {
         Map<String, CartItem> cartItemMap = new HashMap<>();
         cart.getListItems()
                 .forEach(cartItem -> {
-                    cartItemMap.putIfAbsent(cartItem.getId(), cartItem);
+                    cartItemMap.putIfAbsent(cartItem.getItemId(), cartItem);
                 });
 
         for (String itemId : getCartCheckout.getItemId()) {

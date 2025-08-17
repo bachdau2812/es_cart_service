@@ -4,8 +4,9 @@ import lombok.*;
 import lombok.experimental.FieldDefaults;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.elasticsearch.annotations.Document;
+import org.springframework.data.elasticsearch.annotations.Field;
+import org.springframework.data.elasticsearch.annotations.FieldType;
 
-import java.time.LocalDate;
 import java.util.List;
 
 @Data
@@ -18,10 +19,10 @@ import java.util.List;
 public class CartIndex {
     @Id
     String id;
+
+    @Field(type = FieldType.Text)
     String userId;
 
-    List<CartItem> listItems;
-
-    LocalDate createAt;
-    LocalDate updateAt;
+    @Field(type = FieldType.Nested)
+    List<CartItemIndex> listItems;
 }

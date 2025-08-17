@@ -1,9 +1,10 @@
 package com.dauducbach.cart_service.service;
 
-import com.dauducbach.cart_service.CartMapper;
 import com.dauducbach.cart_service.dto.response.ProductResponse;
 import com.dauducbach.cart_service.entity.Cart;
+import com.dauducbach.cart_service.entity.CartIndex;
 import com.dauducbach.cart_service.entity.CartItem;
+import com.dauducbach.cart_service.entity.CartItemIndex;
 import com.dauducbach.cart_service.repository.CartIndexRepository;
 import com.dauducbach.cart_service.repository.CartRepository;
 import com.dauducbach.event.CartEvent;
@@ -37,9 +38,9 @@ public class CartService {
     RedisTemplate<String, Cart> redisTemplateCart;
     KafkaTemplate<String, Object> kafkaTemplate;
     CartIndexRepository cartIndexRepository;
-    CartMapper cartMapper;
 
     public Cart createCart() {
+        log.info("In create cart");
         Jwt jwt = (Jwt) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         String token = "Bearer " + jwt.getTokenValue();
         String userId = jwt.getSubject();
@@ -51,11 +52,17 @@ public class CartService {
                 .createAt(LocalDate.now())
                 .updateAt(LocalDate.now())
                 .build();
-
+        log.info("Cart: {}", cart);
         // Save Cart index to Elasticsearch
-        var cartIndex = cartMapper.toCartIndex(cart);
+        var cartIndex = CartIndex.builder()
+                .id(cart.getId())
+                .userId(cart.getUserId())
+                .listItems(new ArrayList<>())
+                .build();
+        log.info("Cart index: {}", cartIndex);
         cartIndexRepository.save(cartIndex);
 
+        log.info("Save to DB");
         return cartRepository.save(cart);
     }
 
@@ -63,14 +70,14 @@ public class CartService {
         Jwt jwt = (Jwt) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         String userId = jwt.getSubject();
         Cart cart = redisTemplateCart.opsForValue().get("cart:" + userId);
-
+        log.info("Cart 1: {}", cart);
         if (cart == null) {
             cart = cartRepository.findByUserId(userId);
-
+            log.info("Cart 2: {}", cart);
             if (cart == null) {
                 cart = createCart();
+                log.info("Cart 3: {}", cart);
             }
-
             redisTemplateCart.opsForValue().set("cart:" + userId, cart);
         }
     }
@@ -85,89 +92,88 @@ public class CartService {
         Cart cart = redisTemplateCart.opsForValue().get(cartKey);
 
         assert cart != null;
-        if (!cart.getListItems().isEmpty()) {
-            boolean isExisted = cart.getListItems()
+        boolean isExisted = cart.getListItems()
+                .stream()
+                .filter(cartItem -> cartItem.getProductId().equals(productId))
+                .toList()
+                .isEmpty();
+        if (!isExisted) {
+            List<CartItem> itemEvent = new ArrayList<>();
+            List<CartItem> cartItems = cart.getListItems()
                     .stream()
-                    .filter(cartItem -> cartItem.getProductId().equals(productId))
-                    .toList()
-                    .isEmpty();
+                    .map(cartItem -> {
+                        if (cartItem.getProductId().equals(productId)) {
+                            itemEvent.add(cartItem);
+                            cartItem.setQuantity(cartItem.getQuantity() + 1);
+                        }
+                        return cartItem;
+                    })
+                    .toList();
+            cart.setListItems(cartItems);
 
-            if (!isExisted) {
-                List<CartItem> itemEvent = new ArrayList<>();
-                List<CartItem> cartItems = cart.getListItems()
-                        .stream()
-                        .map(cartItem -> {
-                            if (cartItem.getProductId().equals(productId)) {
-                                itemEvent.add(cartItem);
-                                cartItem.setQuantity(cartItem.getQuantity() + 1);
-                            }
-                            return cartItem;
-                        })
-                        .toList();
-                cart.setListItems(cartItems);
-                redisTemplateCart.opsForValue().set(cartKey, cart);
+            var cartEvent = CartEvent.builder()
+                    .action("ADD")
+                    .cartId(cart.getId())
+                    .cartItem(itemEvent.getFirst())
+                    .build();
 
-                var cartEvent = CartEvent.builder()
-                        .action("ADD")
-                        .cartId(cart.getId())
-                        .cartItem(itemEvent.getFirst())
-                        .build();
+            // send event save to database
+            sendEvent("update_cart_event", cartEvent);
 
-                // send event save to database
-                sendEvent("update_cart_event", cartEvent);
+            // send event to inventory service
+            var inventoryEvent = InventoryEvent.builder()
+                    .action("ADD")
+                    .productId(List.of(itemEvent.getFirst().getProductId()))
+                    .build();
+            kafkaTemplate.send("cart_update_inventory_event", inventoryEvent);
 
-                // send event to inventory service
-                var inventoryEvent = InventoryEvent.builder()
-                        .action("ADD")
-                        .productId(List.of(itemEvent.getFirst().getProductId()))
-                        .build();
-                kafkaTemplate.send("cart_update_inventory_event", inventoryEvent);
+        } else {
+            ProductResponse productResponse  = restClient.get()
+                    .uri("http://localhost:8082/product/get_by_id/{productId}", productId)
+                    .header("Authorization", token)
+                    .retrieve()
+                    .body(ProductResponse.class);
 
-                return "Added product to cart";
-            }
+            assert productResponse != null;
+            CartItem cartItem = CartItem.builder()
+                    .itemId(UUID.randomUUID().toString())
+                    .productId(productResponse.getId())
+                    .productBrand(productResponse.getProductBrandId())
+                    .productName(productResponse.getProductName())
+                    .addAt(LocalDate.now())
+                    .price(productResponse.getPrice())
+                    .quantity(quantity)
+                    .description(productResponse.getDescriptions())
+                    .productImageUrl(productResponse.getProductImages()
+                            .stream()
+                            .filter(productImageResponse -> productImageResponse.getIsThumbnail() == 1)
+                            .toList()
+                            .getFirst()
+                            .getImageUrl()
+                    )
+                    .build();
+            log.info("Cart item: {}", cartItem);
+
+            cart.getListItems().add(cartItem);
+
+            // send event to database
+            var cartEvent = CartEvent.builder()
+                    .action("ADD")
+                    .cartId(cart.getId())
+                    .cartItem(cartItem)
+                    .build();
+            sendEvent("update_cart_event", cartEvent);
+            log.info("Update Cart Event 2: {}", cartEvent);
+
+            // send event to inventory service
+            var inventoryEvent = InventoryEvent.builder()
+                    .action("ADD")
+                    .productId(List.of(cartItem.getProductId()))
+                    .build();
+            log.info("Update DB Event 2: {}", inventoryEvent);
+            kafkaTemplate.send("cart_update_inventory_event", inventoryEvent);
         }
-
-        ProductResponse productResponse  = restClient.get()
-                .uri("http://localhost:8082/product/get_by_id/{productId}", productId)
-                .header("Authorization", token)
-                .retrieve()
-                .body(ProductResponse.class);
-
-        assert productResponse != null;
-        CartItem cartItem = CartItem.builder()
-                .productId(productResponse.getId())
-                .productBrand(productResponse.getProductBrandId())
-                .productName(productResponse.getProductName())
-                .addAt(LocalDate.now())
-                .price(productResponse.getPrice())
-                .quantity(quantity)
-                .description(productResponse.getDescriptions())
-                .productImageUrl(productResponse.getProductImages()
-                        .stream()
-                        .filter(productImageResponse -> productImageResponse.getIsThumbnail() == 1)
-                        .toList()
-                        .getFirst()
-                        .getImageUrl()
-                )
-                .build();
-
-        cart.getListItems().add(cartItem);
-
-        // send event to database
-        var cartEvent = CartEvent.builder()
-                .action("ADD")
-                .cartId(cart.getId())
-                .cartItem(cartItem)
-                .build();
-        sendEvent("update_cart_event", cartEvent);
-
-        // send event to inventory service
-        var inventoryEvent = InventoryEvent.builder()
-                .action("ADD")
-                .productId(List.of(cartItem.getProductId()))
-                .build();
-        kafkaTemplate.send("cart_update_inventory_event", inventoryEvent);
-
+        redisTemplateCart.opsForValue().set(cartKey, cart);
         return "Added product to cart";
     }
 
@@ -180,7 +186,7 @@ public class CartService {
 
         assert cart != null;
         cart.getListItems().removeIf(cartItem -> {
-            if (cartItem.getId().equals(itemId)) {
+            if (cartItem.getItemId().equals(itemId)) {
                 deletedItem[0] = cartItem;
                 return true;
             }
@@ -204,6 +210,7 @@ public class CartService {
                 .build();
         kafkaTemplate.send("cart_update_inventory_event", inventoryEvent);
 
+        redisTemplateCart.opsForValue().set("cart:" + userId, cart);
         return "Deleted product from cart";
     }
 
@@ -224,7 +231,26 @@ public class CartService {
     public void updateCartDB(@Payload CartEvent cartEvent) {
         var cart = cartRepository.findById(cartEvent.getCartId()).orElseThrow(() -> new RuntimeException("cart not exists"));
         if (cartEvent.getAction().equals("ADD")) {
-            cart.getListItems().add(cartEvent.getCartItem());
+            boolean isExisted = cart.getListItems()
+                    .stream()
+                    .filter(cartItem -> cartItem.getProductId().equals(cartEvent.getCartItem().getProductId()))
+                    .toList()
+                    .isEmpty();
+
+            if (!isExisted) {
+                List<CartItem> cartItems = cart.getListItems()
+                        .stream()
+                        .map(cartItem -> {
+                            if (cartItem.getProductId().equals(cartEvent.getCartItem().getProductId())) {
+                                cartItem.setQuantity(cartItem.getQuantity() + 1);
+                            }
+                            return cartItem;
+                        })
+                        .toList();
+                cart.setListItems(cartItems);
+            } else {
+                cart.getListItems().add(cartEvent.getCartItem());
+            }
         }
 
         if (cartEvent.getAction().equals("DELETE")) {
@@ -236,15 +262,30 @@ public class CartService {
     }
 
     public void updateCartIndexRepository(CartEvent cartEvent) {
+        log.info("Cart Event: {}", cartEvent);
         var cart = cartIndexRepository.findById(cartEvent.getCartId()).orElseThrow(() -> new RuntimeException("cart not exists"));
+        log.info("Cart Index: {}", cart);
         if (cartEvent.getAction().equals("ADD")) {
-            cart.getListItems().add(cartEvent.getCartItem());
+            cart.getListItems().add(toCartItemIndex(cartEvent.getCartItem()));
         }
 
         if (cartEvent.getAction().equals("DELETE")) {
-            cart.getListItems().remove(cartEvent.getCartItem());
+            cart.getListItems().removeIf(cartItem -> cartItem.getItemId().equals(cartEvent.getCartId()));
         }
 
         cartIndexRepository.save(cart);
+    }
+
+    public CartItemIndex toCartItemIndex(CartItem cartItem) {
+        return CartItemIndex.builder()
+                .itemId(cartItem.getItemId())
+                .productId(cartItem.getProductId())
+                .productName(cartItem.getProductName())
+                .productBrand(cartItem.getProductBrand())
+                .productImageUrl(cartItem.getProductImageUrl())
+                .description(cartItem.getDescription())
+                .price(cartItem.getPrice())
+                .quantity(cartItem.getQuantity())
+                .build();
     }
 }

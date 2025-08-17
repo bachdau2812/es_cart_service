@@ -4,14 +4,13 @@ import lombok.*;
 import lombok.experimental.FieldDefaults;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
 
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE)
 @Builder
-public class CartItem {
+public class CartItemIndex {
     String itemId;
     String productId;
     String productName;         // variant name
@@ -20,5 +19,4 @@ public class CartItem {
     String description;
     BigDecimal price;
     int quantity;
-    LocalDate addAt;
 }

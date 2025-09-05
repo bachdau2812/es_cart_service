@@ -12,3 +12,6 @@ spring:
     redis:
       repositories:
         enabled: false
+
+jwt:
+  signedKey: "key"

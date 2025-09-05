@@ -30,7 +30,7 @@ jobs:
         run: mvn clean test -Dspring.profile.active=test
 
       - name: Build Image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/cart-service:v1
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/cart-service:v1 .
 
       - name: Push Image
         run: docker push ${{ secrets.DOCKER_USERNAME }}/cart-service:v1
